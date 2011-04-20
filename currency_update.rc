@@ -8,6 +8,12 @@
 	RateThreshold = 5
 </Currencies>
 <CSV>
-	EndOfLine = win
 	OutputFile = currency_update.csv
 </CSV>
+<Debug>
+	ShowInfo = 1
+	ShowError = 1
+	ShowWarning = 1
+	ShowDebug = 0
+	ShowDie = 1
+</Debug>

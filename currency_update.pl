@@ -24,10 +24,10 @@ use Class::CSV;
 use constant 'BASE_CURRENCY' => 'EUR';
 use constant 'CURRENCY_FORMAT' => '%.4f';
 
-use constant 'LEVEL_INFO' => 'info';
-use constant 'LEVEL_DEBUG' => 'debug';
-use constant 'LEVEL_DIE' => 'die';
-use constant 'LEVEL_ERROR' => 'error';
+use constant 'LEVEL_INFO' => 'Info';
+use constant 'LEVEL_DEBUG' => 'Debug';
+use constant 'LEVEL_DIE' => 'Die';
+use constant 'LEVEL_ERROR' => 'Error';
 
 my @eols = {
 	'win' => "\r\n",
@@ -79,10 +79,8 @@ debug("Rotating rates ...", LEVEL_INFO);
 $rates = rotate_rates($rates);
 debug("All (rotated) rates: " . Dumper($rates), LEVEL_DEBUG);
 
-debug("Saving rates in DB ...", LEVEL_INFO);
+debug("Saving rates ...", LEVEL_INFO);
 save_rates($rates);
-
-build_report($rates);
 
 debug("Finishing!", LEVEL_INFO);
 
@@ -133,8 +131,6 @@ sub get_hb_rates {
 		foreach my $row ($table->rows) {
 			my %result = ();
 			
-			print "ROW: " . Dumper($row);
-
 			#
 			# Hellenic columns: 1 - currency code, 2 - transfer selling, 3 - transfer buying
 			# BOC columns: 1 - currency code, 4 - transfer selling, 3 - transfer buying
@@ -277,10 +273,25 @@ sub calculate_missing_rates {
 sub save_rates {
 	my $rates = shift;
 
+	my @fields = ('from', 'to', 'rate', 'comment');
+
+	my $csv = Class::CSV->new(
+		'fields' => \@fields,
+		'line_separator' => "\r\n",
+	);
+
 	foreach my $result (@{ $rates }) {
-		my $str = "cur_from = '" . $result->{'from'} . "', cur_to = '" . $result->{'to'} . "', rate = " . $result->{'rate'} ." , comments = '" . $result->{'comment'} . "'";
-		print "$str\n";
+		my @row = ();
+		foreach my $field (@fields) {
+			push(@row, $result->{$field});
+		}
+		$csv->add_line(\@row);
 	}
+
+	open(my $fh, '>', $config{'CSV'}{'OutputFile'});
+	print $fh $csv->string();
+	close($fh);
+
 }
 
 sub verify_rates {
@@ -306,27 +317,13 @@ sub verify_rates {
 	}
 }
 
-sub build_report {
-	my($data) = @_;
-
-	my $csv = Class::CSV->new(
-		'fields' => [qw/from to rate comment/],
-		'line_separator' => "\r\n",
-	);
-
-	for my $row (@$data) {
-		$csv->add_line([$row->{from}, $row->{to}, $row->{rate}, $row->{comment}]);
-	}
-
-	open(my $fh, '>', 'test.csv');
-	print $fh $csv->string();
-	close($fh);
-
-}
-
 sub debug {
 	my ($message, $level) = @_;
-	print "$level $message\n";
+
+	my $show_option = 'Show' . $level;
+	if ($config{'Debug'}{$show_option} > 0) {
+		print "$level $message\n";
+	}
 
 	if ($level eq LEVEL_DIE) {
 		die(1);
