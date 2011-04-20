@@ -19,13 +19,20 @@ use Encode;
 use Fcntl qw(:flock);
 use POSIX qw(strftime);
 use Data::Dumper;
-
-use lib "bin/perl_utils";
-use DBConnect;
-use Common;
+use Class::CSV;
 
 use constant 'BASE_CURRENCY' => 'EUR';
 use constant 'CURRENCY_FORMAT' => '%.4f';
+
+use constant 'LEVEL_INFO' => 'info';
+use constant 'LEVEL_DEBUG' => 'debug';
+use constant 'LEVEL_DIE' => 'die';
+use constant 'LEVEL_ERROR' => 'error';
+
+my @eols = {
+	'win' => "\r\n",
+	'unix' => "\n",
+};
 
 # Making lock
 unless (flock(DATA, LOCK_EX|LOCK_NB)) {
@@ -33,68 +40,51 @@ unless (flock(DATA, LOCK_EX|LOCK_NB)) {
 	exit(1);
 }
 
+my $config = shift || die("No configuration given");
+my %config = Config::General->new($config)->getall();
+
 # Where from should we take the currency quotes
-my $url = 'https://www.hellenicbank.com/easyconsole.cfm/page/currencies'; #'http://www.hellenicbank.com/HB/content/en/treasury.jsp?lang=en';
-my $boc_url = 'http://www.bankofcyprus.com.cy/en-GB/Cyprus/Services--Rates/Exchange-Rates/'; # 'http://www.bankofcyprus.com/Main/ExchangeRates.aspx?lang=en';
-
-my $env = shift || 'local_dev';
-
-my($bin_path) = $0 =~ m#(.*bin)#;
-my %config = Config::General->new("$bin_path/perl_utils/util_conf.rc")->getall();
-
-# DB config
-my $db_data = $config{$env}{'db'};
-my $db_table = 'currency_rates';
-my $sugar_dbh = new DBConnect($db_data->{sugar_db});
-
-my $log_level = 'DEBUG';
-my $log_file = '/var/log/fxpro/currency_hb.log';
-my $logger = create_logger($log_level, $log_file);
-$Common::logger = $logger;
+my $url = $config{'Links'}{'HellenicBank'};
+my $boc_url = $config{'Links'}{'BankOfCyprus'};
 
 # Currencies for which we always must have rates
-my @required_currencies = ('USD', 'EUR', 'CHF', 'JPY', 'GBP', 'RUB');
-my $max_diff = 5; # in %
+my @required_currencies = split(/,/, $config{'Currencies'}{'Required'});
+my $max_diff = $config{'Currencies'}{'RateThreshold'}; # in %
 
-my $from = 'sugar@fxpro.com';
-my $to = ['michael@fxpro.com'];
-my $subject = ($env eq 'prod' ? '' : '[DEV] ') . 'Currency rates update';
-$Common::smtp_host = 'it.fxpro.com';
 
-#
 #  MAIN 
 #
 
-$logger->info("Updating currencies");
-$logger->info("Getting currency rates from Hellenic Bank web site ...");
+debug("Updating currencies", LEVEL_INFO);
+debug("Getting currency rates from Hellenic Bank web site ...", LEVEL_INFO);
 my $rates = get_hb_rates($url,\@required_currencies);
-$logger->debug("Rates from HB: " . Dumper($rates));
+debug("Rates from HB: " . Dumper($rates), LEVEL_DEBUG);
 
-$logger->logdie("The HB currency rates are empty!") unless @$rates;
+debug("The HB currency rates are empty!", LEVEL_DIE) unless @$rates;
 
-$logger->info("Getting currency rates from BOC for cross-checking ...");
+debug("Getting currency rates from BOC for cross-checking ...", LEVEL_INFO);
 my $boc_rates = get_hb_rates($boc_url, \@required_currencies, [0, 0], 4, 1);
-$logger->debug('BOC rates: ' . Dumper($boc_rates));
+debug('BOC rates: ' . Dumper($boc_rates), LEVEL_DEBUG);
 
-$logger->logdie("The BOC currency rates are empty!") unless @$boc_rates;
+debug("The BOC currency rates are empty!", LEVEL_DIE) unless @$boc_rates;
 
-$logger->info("Verify rates ...");
+debug("Verify rates ...", LEVEL_INFO);
 my $ret = verify_rates($rates, $boc_rates);
 
-$logger->info("Calculating missing rates ...");
+debug("Calculating missing rates ...", LEVEL_INFO);
 $rates = calculate_missing_rates($rates,\@required_currencies);
-$logger->debug("HB + missing rates: " . Dumper($rates));
+debug("HB + missing rates: " . Dumper($rates), LEVEL_DEBUG);
 
-$logger->info("Rotating rates ...");
+debug("Rotating rates ...", LEVEL_INFO);
 $rates = rotate_rates($rates);
-$logger->debug("All (rotated) rates: " . Dumper($rates));
+debug("All (rotated) rates: " . Dumper($rates), LEVEL_DEBUG);
 
-$logger->info("Saving rates in DB ...");
+debug("Saving rates in DB ...", LEVEL_INFO);
 save_rates($rates);
 
 build_report($rates);
 
-$logger->info("Finishing!");
+debug("Finishing!", LEVEL_INFO);
 
 #
 # Cleanup received strings
@@ -244,7 +234,7 @@ sub calculate_missing_rates {
 		my $from = @{ $pair }[0];
 		my $to = @{ $pair }[1];
 		
-		$logger->debug("Calculating rate: $from --> $to");
+		debug("Calculating rate: $from --> $to", LEVEL_DEBUG);
 
 		# Find the two rates that are needed for conversion
 		my $from_rate = 0;
@@ -252,14 +242,14 @@ sub calculate_missing_rates {
 
 		# TODO : to avoid repeated calculation we should go over results, not rates here
 		foreach my $rate (@{ $rates }) {
-			$logger->debug("Checking rate: " . Dumper($rate));
+			debug("Checking rate: " . Dumper($rate), LEVEL_DEBUG);
 			if ($rate->{'from'} eq $from) {
 				$from_rate = $rate->{'rate'};
 			}
 			elsif ($rate->{'from'} eq $to) {
 				$to_rate = sprintf(CURRENCY_FORMAT, 1 / $rate->{'rate'});
 			}
-			$logger->debug("Got: from_rate=$from_rate; to_rate=$to_rate");
+			debug("Got: from_rate=$from_rate; to_rate=$to_rate", LEVEL_DEBUG);
 		}
 
 		if ($from_rate != 0 && $to_rate !=0 && $to ne BASE_CURRENCY) {
@@ -269,12 +259,12 @@ sub calculate_missing_rates {
 			$result{'rate'} = sprintf(CURRENCY_FORMAT, $from_rate * $to_rate);
 			$result{'comment'} = "Automatically calculated (from=$from_rate,to=$to_rate)";
 			
-			$logger->debug("RESULT: $from --> $to: $result{'rate'}");
+			debug("RESULT: $from --> $to: $result{'rate'}", LEVEL_DEBUG);
 
 			push @results, \%result;
 		}
 		else {
-			$logger->error("Something went wrong while calculating $from => $to!!!");
+			debug("Something went wrong while calculating $from => $to!!!", LEVEL_ERROR);
 		}
 	}
 
@@ -288,11 +278,8 @@ sub save_rates {
 	my $rates = shift;
 
 	foreach my $result (@{ $rates }) {
-		my $sql = "INSERT INTO $db_table SET cur_from = '" . $result->{'from'} . "', cur_to = '" . $result->{'to'} . "', rate = " . $result->{'rate'} ." , comments = '" . $result->{'comment'} . "', created=NOW()";
-		my $rv = $sugar_dbh->query($sql);
-		unless ($rv) {
-			$logger->error("Failed SQL query: $sql");
-		}
+		my $str = "cur_from = '" . $result->{'from'} . "', cur_to = '" . $result->{'to'} . "', rate = " . $result->{'rate'} ." , comments = '" . $result->{'comment'} . "'";
+		print "$str\n";
 	}
 }
 
@@ -300,19 +287,19 @@ sub verify_rates {
 	my($hb_rates, $boc_rates) = @_;
 
 	for my $rate(@$hb_rates) {
-		$logger->debug("Verify rate: " . Dumper($rate));
+		debug("Verify rate: " . Dumper($rate), LEVEL_DEBUG);
 	
 		for my $boc_rate (@$boc_rates) {
 			if($boc_rate->{from} eq $rate->{from} && $boc_rate->{to} eq $rate->{to}) {
-				$logger->debug("Found similar rate: $rate->{from} --> $rate->{to} ...");
+				debug("Found similar rate: $rate->{from} --> $rate->{to} ...", LEVEL_DEBUG);
 				
 				my $selling_diff = sprintf('%.2f', (abs($rate->{sell} - $boc_rate->{sell}) * 100) / $rate->{sell});
 				my $buying_diff = sprintf('%.2f', (abs($rate->{buy} - $boc_rate->{buy}) * 100) / $rate->{buy});
 
-				$logger->debug("Selling: HB=$rate->{sell}; BOC=$boc_rate->{sell} --> $selling_diff; buying: HB=$rate->{buy}; BOC=$boc_rate->{buy} --> $buying_diff");
+				debug("Selling: HB=$rate->{sell}; BOC=$boc_rate->{sell} --> $selling_diff; buying: HB=$rate->{buy}; BOC=$boc_rate->{buy} --> $buying_diff", LEVEL_DEBUG);
 				
 				if($selling_diff > $max_diff or $buying_diff > $max_diff) {
-					$logger->logdie("The currency rate difference between HB and BOC - $selling_diff / $buying_diff, is greater then $max_diff! Currency from: $rate->{from}; currency to: $rate->{to}");
+					debug("The currency rate difference between HB and BOC - $selling_diff / $buying_diff, is greater then $max_diff! Currency from: $rate->{from}; currency to: $rate->{to}", LEVEL_DIE);
 				}
 			}
 		}
@@ -322,15 +309,28 @@ sub verify_rates {
 sub build_report {
 	my($data) = @_;
 
-	my $body = '<table width="80%"><tr bgcolor="#C0C0C0"><th>#</th><th>From</th><th>To</th><th>Rate</th><th>Comment</th></tr>';
-	my $count = 0;
-	for my $row (@$data) {
-		my $bgcolor = ++$count%2 ? '#F1F1F1' : '#FFFFFF';
-		$body .= "<tr bgcolor='$bgcolor'><td>$count</td><td>$row->{from}</td><td>$row->{to}</td><td>$row->{rate}</td><td>$row->{comment}</td></tr>";
-	}
-	$body .= "</table>";
+	my $csv = Class::CSV->new(
+		'fields' => [qw/from to rate comment/],
+		'line_separator' => "\r\n",
+	);
 
-	my $ret = send_email($from, $to, $subject, $body, []);
+	for my $row (@$data) {
+		$csv->add_line([$row->{from}, $row->{to}, $row->{rate}, $row->{comment}]);
+	}
+
+	open(my $fh, '>', 'test.csv');
+	print $fh $csv->string();
+	close($fh);
+
+}
+
+sub debug {
+	my ($message, $level) = @_;
+	print "$level $message\n";
+
+	if ($level eq LEVEL_DIE) {
+		die(1);
+	}
 }
 
 __DATA__

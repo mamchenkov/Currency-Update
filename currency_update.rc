@@ -1,0 +1,13 @@
+<Links>
+	HellenicBank = https://www.hellenicbank.com/easyconsole.cfm/page/currencies
+	BankOfCyprus = http://www.bankofcyprus.com.cy/en-GB/Cyprus/Services--Rates/Exchange-Rates/
+</Links>
+<Currencies>
+	Base = EUR
+	Required = USD,EUR,CHF,JPY,GBP,RUB
+	RateThreshold = 5
+</Currencies>
+<CSV>
+	EndOfLine = win
+	OutputFile = currency_update.csv
+</CSV>
