@@ -21,11 +21,6 @@ use constant 'LEVEL_DEBUG' => 'Debug';
 use constant 'LEVEL_DIE' => 'Die';
 use constant 'LEVEL_ERROR' => 'Error';
 
-my @eols = {
-	'win' => "\r\n",
-	'unix' => "\n",
-};
-
 # Making lock
 unless (flock(DATA, LOCK_EX|LOCK_NB)) {
     print "$0 is already running. Exiting.\n";
