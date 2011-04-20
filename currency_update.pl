@@ -1,14 +1,5 @@
 #!/usr/bin/perl -w
 
-#
-# This script fetches currency exchange rates from the web site
-# of Hellenic Bank.  It than makes sure that all the required
-# rates exist, cross-checks rates with Bank of Cyprus,  and then
-# exports them into CSV file.
-#
-# Ideally, this script should work as a schedule job.
-#
-
 use strict;
 use warnings;
 use utf8;
