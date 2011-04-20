@@ -28,6 +28,9 @@ unless (flock(DATA, LOCK_EX|LOCK_NB)) {
 }
 
 my $config = shift || die("No configuration given");
+unless(-e $config) {
+	die "Config file $config doesn't exist!";
+}
 my %config = Config::General->new($config)->getall();
 
 # Where from should we take the currency quotes
